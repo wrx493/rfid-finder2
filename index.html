@@ -1,0 +1,215 @@
+# rfid-finder2<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>RFID 寻物器助手</title>
+    <style>
+        body { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; padding: 20px; max-width: 500px; margin: 0 auto; background: #f8f8fc; }
+        .card { background: white; border-radius: 28px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        button { background: #007aff; color: white; border: none; padding: 14px 20px; border-radius: 40px; font-size: 16px; font-weight: 500; width: 100%; margin-top: 8px; cursor: pointer; }
+        button:active { transform: scale(0.97); }
+        .btn-secondary { background: #e5e5ea; color: #007aff; }
+        .led { width: 12px; height: 12px; border-radius: 50%; background: #c6c6c8; display: inline-block; margin-right: 8px; }
+        .led.on { background: #34c759; box-shadow: 0 0 4px #34c759; }
+        .status { display: flex; align-items: center; margin-bottom: 16px; gap: 8px; }
+        .rssi-bar { background: #e5e5ea; border-radius: 12px; height: 12px; width: 100%; margin: 12px 0; }
+        .rssi-fill { background: #34c759; width: 0%; height: 100%; border-radius: 12px; }
+        .rssi-value { font-size: 32px; font-weight: 700; margin: 8px 0; }
+        input { width: 100%; padding: 14px; border: 1px solid #c6c6c8; border-radius: 14px; font-size: 16px; margin: 12px 0; background: white; }
+        .info-text { font-size: 14px; color: #8e8e93; margin-top: 12px; word-break: break-all; }
+        hr { margin: 20px 0; border: none; border-top: 0.5px solid #c6c6c8; }
+        .flex { display: flex; gap: 12px; }
+        .flex button { flex: 1; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="status">
+        <div class="led" id="led"></div>
+        <span id="statusText">未连接</span>
+    </div>
+    <button id="connectBtn">🔗 连接 RFID 寻物器</button>
+    <button id="disconnectBtn" class="btn-secondary" style="margin-top: 8px;">❌ 断开</button>
+</div>
+
+<div class="card" id="trackingCard" style="display: none;">
+    <div>📡 信号强度</div>
+    <div class="rssi-value" id="rssiValue">-- dBm</div>
+    <div class="rssi-bar">
+        <div class="rssi-fill" id="rssiFill"></div>
+    </div>
+    <div class="info-text" id="distanceHint">等待数据...</div>
+</div>
+
+<div class="card" id="learnCard" style="display: none;">
+    <div>📝 为新物品命名</div>
+    <input type="text" id="tagNameInput" placeholder="例如：钥匙、水杯、充电宝" autocomplete="off">
+    <button id="sendNameBtn">💾 保存并开始追踪</button>
+    <div class="info-text" id="learnHint"></div>
+</div>
+
+<div class="card">
+    <div class="info-text">
+        ⚡ 使用说明：<br>
+        1. 点击“连接 RFID 寻物器”<br>
+        2. 选择设备 “RFID_Finder”<br>
+        3. 连接后自动接收信号强度<br>
+        4. 扫描到新标签时，输入名称保存
+    </div>
+</div>
+
+<script>
+    // ========== UUID 已全部改为小写 ==========
+    const SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+    const RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+    const TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+    // ========================================
+
+    let device = null;
+    let server = null;
+    let service = null;
+    let txChar = null;
+    let rxChar = null;
+    let connected = false;
+    let currentRequestEPC = "";
+
+    // DOM 元素
+    const led = document.getElementById('led');
+    const statusSpan = document.getElementById('statusText');
+    const connectBtn = document.getElementById('connectBtn');
+    const disconnectBtn = document.getElementById('disconnectBtn');
+    const trackingCard = document.getElementById('trackingCard');
+    const learnCard = document.getElementById('learnCard');
+    const rssiValueSpan = document.getElementById('rssiValue');
+    const rssiFill = document.getElementById('rssiFill');
+    const distanceHintSpan = document.getElementById('distanceHint');
+    const tagNameInput = document.getElementById('tagNameInput');
+    const sendNameBtn = document.getElementById('sendNameBtn');
+    const learnHint = document.getElementById('learnHint');
+
+    function setConnectedUI(ok) {
+        connected = ok;
+        if (ok) {
+            led.classList.add('on');
+            statusSpan.innerText = '已连接';
+            trackingCard.style.display = 'block';
+            disconnectBtn.disabled = false;
+            connectBtn.disabled = true;
+        } else {
+            led.classList.remove('on');
+            statusSpan.innerText = '未连接';
+            trackingCard.style.display = 'none';
+            learnCard.style.display = 'none';
+            disconnectBtn.disabled = true;
+            connectBtn.disabled = false;
+            rssiValueSpan.innerText = '-- dBm';
+            rssiFill.style.width = '0%';
+            distanceHintSpan.innerText = '等待数据...';
+            if (device && device.gatt) {
+                try { device.gatt.disconnect(); } catch(e) {}
+            }
+            device = null; server = null; service = null; txChar = null; rxChar = null;
+        }
+    }
+
+    function updateRSSI(rssi) {
+        rssiValueSpan.innerText = rssi + " dBm";
+        let percent = (rssi + 100) / 70 * 100;
+        percent = Math.min(100, Math.max(0, percent));
+        rssiFill.style.width = percent + "%";
+        if (rssi > -50) distanceHintSpan.innerText = "🔊 非常近";
+        else if (rssi > -65) distanceHintSpan.innerText = "📱 较近";
+        else if (rssi > -75) distanceHintSpan.innerText = "🚶 中等距离";
+        else distanceHintSpan.innerText = "📍 较远";
+    }
+
+    function handleReceivedData(value) {
+        const str = new TextDecoder().decode(value);
+        console.log("📩", str);
+        if (str.startsWith("REQUEST_NAME:")) {
+            currentRequestEPC = str.substring(13);
+            learnHint.innerText = `EPC: ${currentRequestEPC.substring(0,12)}...`;
+            learnCard.style.display = 'block';
+        } else if (str.startsWith("TRACKING:")) {
+            const parts = str.substring(10).split(',');
+            if (parts.length >= 2) {
+                const rssi = parseInt(parts[1]);
+                if (!isNaN(rssi)) updateRSSI(rssi);
+            }
+            if (learnCard.style.display === 'block') {
+                learnCard.style.display = 'none';
+                currentRequestEPC = "";
+                tagNameInput.value = "";
+            }
+        } else {
+            const maybeRssi = parseInt(str);
+            if (!isNaN(maybeRssi) && maybeRssi >= -100 && maybeRssi <= 0) {
+                updateRSSI(maybeRssi);
+            }
+        }
+    }
+
+    async function connectBLE() {
+        if (!navigator.bluetooth) {
+            alert("您的浏览器不支持 Web Bluetooth。请使用 Chrome 或 Edge。");
+            return;
+        }
+        try {
+            const options = {
+                filters: [{ services: [SERVICE_UUID] }],
+                optionalServices: [SERVICE_UUID]
+            };
+            device = await navigator.bluetooth.requestDevice(options);
+            server = await device.gatt.connect();
+            service = await server.getPrimaryService(SERVICE_UUID);
+            txChar = await service.getCharacteristic(TX_UUID);
+            rxChar = await service.getCharacteristic(RX_UUID);
+            await txChar.startNotifications();
+            txChar.addEventListener('characteristicvaluechanged', (e) => {
+                handleReceivedData(e.target.value);
+            });
+            setConnectedUI(true);
+        } catch (err) {
+            console.error(err);
+            alert("连接失败: " + err.message);
+            setConnectedUI(false);
+        }
+    }
+
+    async function sendTagName() {
+        if (!connected || !rxChar) {
+            alert("设备未连接");
+            return;
+        }
+        const name = tagNameInput.value.trim();
+        if (!name) {
+            alert("请输入物品名称");
+            return;
+        }
+        if (!currentRequestEPC) {
+            alert("未收到学习请求，请先扫描新标签");
+            return;
+        }
+        const message = currentRequestEPC + ":" + name;
+        await rxChar.writeValue(new TextEncoder().encode(message));
+        learnCard.style.display = 'none';
+        tagNameInput.value = "";
+        currentRequestEPC = "";
+    }
+
+    function disconnect() {
+        if (device && device.gatt) {
+            device.gatt.disconnect();
+        }
+        setConnectedUI(false);
+    }
+
+    connectBtn.onclick = connectBLE;
+    disconnectBtn.onclick = disconnect;
+    sendNameBtn.onclick = sendTagName;
+
+    setConnectedUI(false);
+</script>
+</body>
+</html>
