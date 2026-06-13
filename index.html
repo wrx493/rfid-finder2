@@ -1,4 +1,4 @@
-# rfid-finder2<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -157,10 +157,14 @@
         }
         try {
             const options = {
-                filters: [{ services: [SERVICE_UUID] }],
+                acceptAllDevices: true,
                 optionalServices: [SERVICE_UUID]
             };
             device = await navigator.bluetooth.requestDevice(options);
+            if (device.name !== "RFID_Finder") {
+                alert("请选择名为 RFID_Finder 的设备");
+                return;
+            }
             server = await device.gatt.connect();
             service = await server.getPrimaryService(SERVICE_UUID);
             txChar = await service.getCharacteristic(TX_UUID);
