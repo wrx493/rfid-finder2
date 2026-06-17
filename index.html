@@ -169,6 +169,12 @@
             service = await server.getPrimaryService(SERVICE_UUID);
             txChar = await service.getCharacteristic(TX_UUID);
             rxChar = await service.getCharacteristic(RX_UUID);
+
+            // ===== 关键修复：启用通知描述符 =====
+            const descriptor = await txChar.getDescriptor(0x2902);
+            await descriptor.writeValue(new Uint8Array([1, 0]));
+            // ===================================
+
             await txChar.startNotifications();
             txChar.addEventListener('characteristicvaluechanged', (e) => {
                 handleReceivedData(e.target.value);
