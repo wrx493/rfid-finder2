@@ -60,11 +60,12 @@
 </div>
 
 <script>
-    // ========== UUID 已全部改为小写 ==========
-    const SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-    const RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
-    const TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
-    // ========================================
+    // ========== 已更换 UUID，避开浏览器黑名单 ==========
+    // 必须与 ESP32 代码中的 UUID 完全一致
+    const SERVICE_UUID = "12345678-1234-1234-1234-123456789abc";
+    const RX_UUID = "abcdef01-2345-6789-abcd-ef0123456789";
+    const TX_UUID = "fedcba09-8765-4321-abcd-ef0123456789";
+    // =====================================================
 
     let device = null;
     let server = null;
@@ -74,7 +75,6 @@
     let connected = false;
     let currentRequestEPC = "";
 
-    // DOM 元素
     const led = document.getElementById('led');
     const statusSpan = document.getElementById('statusText');
     const connectBtn = document.getElementById('connectBtn');
@@ -170,10 +170,9 @@
             txChar = await service.getCharacteristic(TX_UUID);
             rxChar = await service.getCharacteristic(RX_UUID);
 
-            // ===== 关键修复：启用通知描述符 =====
+            // 启用通知描述符
             const descriptor = await txChar.getDescriptor(0x2902);
             await descriptor.writeValue(new Uint8Array([1, 0]));
-            // ===================================
 
             await txChar.startNotifications();
             txChar.addEventListener('characteristicvaluechanged', (e) => {
