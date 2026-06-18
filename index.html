@@ -60,12 +60,11 @@
 </div>
 
 <script>
-    // ========== 已更换 UUID，避开浏览器黑名单 ==========
-    // 必须与 ESP32 代码中的 UUID 完全一致
+    // ========== UUID（与 ESP32 端完全一致） ==========
     const SERVICE_UUID = "12345678-1234-1234-1234-123456789abc";
     const RX_UUID = "abcdef01-2345-6789-abcd-ef0123456789";
     const TX_UUID = "fedcba09-8765-4321-abcd-ef0123456789";
-    // =====================================================
+    // ===================================================
 
     let device = null;
     let server = null;
@@ -170,10 +169,8 @@
             txChar = await service.getCharacteristic(TX_UUID);
             rxChar = await service.getCharacteristic(RX_UUID);
 
-            // 启用通知描述符
-            const descriptor = await txChar.getDescriptor(0x2902);
-            await descriptor.writeValue(new Uint8Array([1, 0]));
-
+            // ===== 关键修复：直接调用 startNotifications，浏览器自动处理描述符 =====
+            // 不要手动写入 0x2902，否则会触发黑名单错误
             await txChar.startNotifications();
             txChar.addEventListener('characteristicvaluechanged', (e) => {
                 handleReceivedData(e.target.value);
