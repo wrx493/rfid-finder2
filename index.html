@@ -9,7 +9,9 @@
         .card { background: white; border-radius: 28px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
         button { background: #007aff; color: white; border: none; padding: 14px 20px; border-radius: 40px; font-size: 16px; font-weight: 500; width: 100%; margin-top: 8px; cursor: pointer; }
         button:active { transform: scale(0.97); }
+        button:disabled { opacity: 0.5; }
         .btn-secondary { background: #e5e5ea; color: #007aff; }
+        .btn-scan { background: #34c759; color: white; }
         .led { width: 12px; height: 12px; border-radius: 50%; background: #c6c6c8; display: inline-block; margin-right: 8px; }
         .led.on { background: #34c759; box-shadow: 0 0 4px #34c759; }
         .status { display: flex; align-items: center; margin-bottom: 16px; gap: 8px; }
@@ -18,9 +20,10 @@
         .rssi-value { font-size: 32px; font-weight: 700; margin: 8px 0; }
         input { width: 100%; padding: 14px; border: 1px solid #c6c6c8; border-radius: 14px; font-size: 16px; margin: 12px 0; background: white; }
         .info-text { font-size: 14px; color: #8e8e93; margin-top: 12px; word-break: break-all; }
-        hr { margin: 20px 0; border: none; border-top: 0.5px solid #c6c6c8; }
         .flex { display: flex; gap: 12px; }
         .flex button { flex: 1; }
+        .btn-group { display: flex; gap: 8px; }
+        .btn-group button { flex: 1; }
     </style>
 </head>
 <body>
@@ -29,8 +32,11 @@
         <div class="led" id="led"></div>
         <span id="statusText">未连接</span>
     </div>
-    <button id="connectBtn">🔗 连接 RFID 寻物器</button>
-    <button id="disconnectBtn" class="btn-secondary" style="margin-top: 8px;">❌ 断开</button>
+    <div class="btn-group">
+        <button id="connectBtn">🔗 连接</button>
+        <button id="disconnectBtn" class="btn-secondary" style="margin-top:0;">❌ 断开</button>
+    </div>
+    <button id="scanBtn" class="btn-scan" disabled>🔍 扫描新标签</button>
 </div>
 
 <div class="card" id="trackingCard" style="display: none;">
@@ -52,10 +58,10 @@
 <div class="card">
     <div class="info-text">
         ⚡ 使用说明：<br>
-        1. 点击“连接 RFID 寻物器”<br>
-        2. 选择设备 “RFID_Finder”<br>
-        3. 连接后自动接收信号强度<br>
-        4. 扫描到新标签时，输入名称保存
+        1. 点击“连接”选择设备 RFID_Finder<br>
+        2. 连接成功后，点击“扫描新标签”<br>
+        3. 扫描到新标签时，输入名称保存<br>
+        4. 之后会自动进入追踪模式显示信号强度
     </div>
 </div>
 
@@ -78,6 +84,7 @@
     const statusSpan = document.getElementById('statusText');
     const connectBtn = document.getElementById('connectBtn');
     const disconnectBtn = document.getElementById('disconnectBtn');
+    const scanBtn = document.getElementById('scanBtn');
     const trackingCard = document.getElementById('trackingCard');
     const learnCard = document.getElementById('learnCard');
     const rssiValueSpan = document.getElementById('rssiValue');
@@ -93,6 +100,7 @@
             led.classList.add('on');
             statusSpan.innerText = '已连接';
             trackingCard.style.display = 'block';
+            scanBtn.disabled = false;
             disconnectBtn.disabled = false;
             connectBtn.disabled = true;
         } else {
@@ -100,11 +108,15 @@
             statusSpan.innerText = '未连接';
             trackingCard.style.display = 'none';
             learnCard.style.display = 'none';
+            scanBtn.disabled = true;
             disconnectBtn.disabled = true;
             connectBtn.disabled = false;
             rssiValueSpan.innerText = '-- dBm';
             rssiFill.style.width = '0%';
             distanceHintSpan.innerText = '等待数据...';
+            if (txChar) {
+                try { txChar.stopNotifications(); } catch(e) {}
+            }
             if (device && device.gatt) {
                 try { device.gatt.disconnect(); } catch(e) {}
             }
@@ -136,7 +148,9 @@
                 const rssi = parseInt(parts[1]);
                 if (!isNaN(rssi)) updateRSSI(rssi);
             }
-            if (learnCard.style.display === 'block') {
+            // 只有当前命名的 EPC 匹配时才关闭学习卡片，避免误关
+            const epcFromTrack = parts.length >= 1 ? parts[0] : "";
+            if (learnCard.style.display === 'block' && epcFromTrack === currentRequestEPC) {
                 learnCard.style.display = 'none';
                 currentRequestEPC = "";
                 tagNameInput.value = "";
@@ -169,8 +183,6 @@
             txChar = await service.getCharacteristic(TX_UUID);
             rxChar = await service.getCharacteristic(RX_UUID);
 
-            // ===== 关键修复：直接调用 startNotifications，浏览器自动处理描述符 =====
-            // 不要手动写入 0x2902，否则会触发黑名单错误
             await txChar.startNotifications();
             txChar.addEventListener('characteristicvaluechanged', (e) => {
                 handleReceivedData(e.target.value);
@@ -198,21 +210,45 @@
             return;
         }
         const message = currentRequestEPC + ":" + name;
-        await rxChar.writeValue(new TextEncoder().encode(message));
-        learnCard.style.display = 'none';
-        tagNameInput.value = "";
-        currentRequestEPC = "";
+        try {
+            await rxChar.writeValue(new TextEncoder().encode(message));
+            learnCard.style.display = 'none';
+            tagNameInput.value = "";
+            currentRequestEPC = "";
+        } catch (err) {
+            alert("发送失败: " + err.message);
+        }
     }
 
-    function disconnect() {
+    // ===== 新增：扫描按钮 =====
+    async function sendScanCommand() {
+        if (!connected || !rxChar) {
+            alert("请先连接设备");
+            return;
+        }
+        try {
+            await rxChar.writeValue(new TextEncoder().encode("s"));
+            console.log("已发送扫描指令");
+            alert("📡 扫描指令已发送，请将标签靠近读卡器");
+        } catch (err) {
+            console.error("扫描失败:", err);
+            alert("发送扫描指令失败: " + err.message);
+        }
+    }
+
+    async function disconnect() {
+        if (txChar) {
+            try { await txChar.stopNotifications(); } catch(e) {}
+        }
         if (device && device.gatt) {
-            device.gatt.disconnect();
+            try { device.gatt.disconnect(); } catch(e) {}
         }
         setConnectedUI(false);
     }
 
     connectBtn.onclick = connectBLE;
     disconnectBtn.onclick = disconnect;
+    scanBtn.onclick = sendScanCommand;
     sendNameBtn.onclick = sendTagName;
 
     setConnectedUI(false);
